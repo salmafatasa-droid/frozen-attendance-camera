@@ -1,0 +1,314 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Frozen Attendance - QR Scanner</title>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: 22px 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: Arial, sans-serif;
+      color: #eaf7ff;
+      background:
+        radial-gradient(circle at 50% 0%, #214d70 0%, transparent 48%),
+        linear-gradient(145deg, #020914, #071b30 65%, #0b2942);
+    }
+
+    .card {
+      width: 100%;
+      max-width: 460px;
+      padding: 22px;
+      border: 1px solid #39688b;
+      border-radius: 24px;
+      background: rgba(6, 23, 41, .97);
+      box-shadow: 0 18px 55px #0009;
+    }
+
+    header { text-align: center; margin-bottom: 20px; }
+
+    h1 {
+      margin: 0;
+      color: #c4edff;
+      font-size: 24px;
+      letter-spacing: 2px;
+    }
+
+    header p {
+      margin: 8px 0 0;
+      color: #9bbbd3;
+      font-size: 13px;
+    }
+
+    .camera {
+      position: relative;
+      overflow: hidden;
+      aspect-ratio: 4 / 5;
+      border: 2px solid #76d2ff;
+      border-radius: 18px;
+      background: #000;
+    }
+
+    video {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .frame {
+      position: absolute;
+      inset: 18% 12%;
+      border: 2px solid #9be4ff;
+      border-radius: 16px;
+      box-shadow: 0 0 18px #55c8ff88;
+      pointer-events: none;
+    }
+
+    .status {
+      min-height: 48px;
+      margin: 16px 0;
+      padding: 13px;
+      border-radius: 12px;
+      background: #102d48;
+      color: #d5efff;
+      text-align: center;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .buttons { display: grid; gap: 10px; }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      border: 0;
+      border-radius: 12px;
+      font-weight: bold;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    #startButton {
+      color: #06223a;
+      background: linear-gradient(135deg, #d5f3ff, #6bcfff);
+    }
+
+    #nextButton {
+      display: none;
+      color: #e5f7ff;
+      background: #285477;
+    }
+
+    #closeButton {
+      color: #d5eaff;
+      background: #1a3045;
+    }
+
+    button:disabled { opacity: .55; cursor: wait; }
+
+    .foot {
+      margin-top: 17px;
+      color: #789ab5;
+      text-align: center;
+      font-size: 11px;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="card">
+    <header>
+      <h1>FROZEN SCANNER</h1>
+      <p>QR Attendance System · SMAN 2 PAYAKUMBUH</p>
+    </header>
+
+    <div class="camera">
+      <video id="video" autoplay muted playsinline></video>
+      <div class="frame"></div>
+    </div>
+
+    <div class="status" id="status">
+      Hubungkan scanner melalui website Apps Script, lalu tekan MULAI KAMERA.
+    </div>
+
+    <div class="buttons">
+      <button id="startButton" type="button">MULAI KAMERA</button>
+      <button id="nextButton" type="button">SCAN BERIKUTNYA</button>
+      <button id="closeButton" type="button">TUTUP SCANNER</button>
+    </div>
+
+    <div class="foot">FROZEN ATTENDANCE SYSTEM</div>
+  </main>
+
+  <script>
+    const video = document.getElementById('video');
+    const statusBox = document.getElementById('status');
+    const startButton = document.getElementById('startButton');
+    const nextButton = document.getElementById('nextButton');
+    const closeButton = document.getElementById('closeButton');
+
+    let reader = null;
+    let controls = null;
+    let scanning = false;
+    let sending = false;
+
+    function status(message) {
+      statusBox.textContent = message;
+    }
+
+    function loadZXing() {
+      return new Promise((resolve, reject) => {
+        if (window.ZXing && window.ZXing.BrowserMultiFormatReader) {
+          resolve();
+          return;
+        }
+
+        const sources = [
+          'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js',
+          'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js'
+        ];
+
+        let index = 0;
+
+        function tryNext() {
+          if (index >= sources.length) {
+            reject(new Error('Library QR tidak berhasil dimuat dari kedua sumber.'));
+            return;
+          }
+
+          const script = document.createElement('script');
+          script.src = sources[index++];
+          script.onload = () => {
+            if (window.ZXing && window.ZXing.BrowserMultiFormatReader) {
+              resolve();
+            } else {
+              script.remove();
+              tryNext();
+            }
+          };
+          script.onerror = () => {
+            script.remove();
+            tryNext();
+          };
+
+          document.head.appendChild(script);
+        }
+
+        tryNext();
+      });
+    }
+
+    function stopCamera() {
+      scanning = false;
+
+      if (controls) {
+        try { controls.stop(); } catch (e) {}
+        controls = null;
+      }
+
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(track => track.stop());
+        video.srcObject = null;
+      }
+    }
+
+    async function startCamera() {
+      if (scanning) return;
+
+      if (!window.opener || window.opener.closed) {
+        status('Buka scanner melalui tombol Scanner di website Apps Script, bukan langsung dari alamat GitHub.');
+        return;
+      }
+
+      startButton.disabled = true;
+      nextButton.style.display = 'none';
+      sending = false;
+
+      try {
+        status('Memuat pembaca QR...');
+        await loadZXing();
+
+        status('Meminta izin kamera...');
+        reader = new ZXing.BrowserMultiFormatReader();
+
+        scanning = true;
+
+        controls = await reader.decodeFromConstraints(
+          {
+            audio: false,
+            video: { facingMode: { ideal: 'environment' } }
+          },
+          video,
+          (result, error) => {
+            if (!result || !scanning || sending) return;
+
+            const qrText = result.getText();
+            if (!qrText) return;
+
+            sending = true;
+            stopCamera();
+
+            status('QR terbaca. Mengirim hasil ke website utama...');
+
+            try {
+              window.opener.postMessage({
+                type: 'FROZEN_QR_RESULT',
+                qr: qrText
+              }, '*');
+
+              status('QR berhasil dikirim. Silakan periksa hasil absensi di website utama.');
+              nextButton.style.display = 'block';
+            } catch (e) {
+              status('Gagal mengirim hasil QR. Tutup scanner lalu coba kembali.');
+              nextButton.style.display = 'block';
+            }
+          }
+        );
+
+        status('Kamera aktif. Arahkan kamera ke QR Code siswa.');
+      } catch (error) {
+        stopCamera();
+
+        if (error.name === 'NotAllowedError') {
+          status('Izin kamera ditolak. Izinkan akses kamera pada pengaturan browser.');
+        } else if (error.name === 'NotFoundError') {
+          status('Kamera tidak ditemukan pada perangkat ini.');
+        } else if (error.name === 'NotReadableError') {
+          status('Kamera sedang digunakan aplikasi lain. Tutup aplikasi kamera lain lalu coba lagi.');
+        } else {
+          status('Scanner gagal dimulai: ' + (error.message || 'Periksa koneksi internet dan izin kamera.'));
+        }
+      } finally {
+        startButton.disabled = false;
+      }
+    }
+
+    startButton.addEventListener('click', startCamera);
+
+    nextButton.addEventListener('click', () => {
+      sending = false;
+      startCamera();
+    });
+
+    closeButton.addEventListener('click', () => {
+      stopCamera();
+      if (window.opener && !window.opener.closed) {
+        window.close();
+      } else {
+        status('Kamera dihentikan. Kamu bisa menutup tab ini.');
+      }
+    });
+
+    window.addEventListener('beforeunload', stopCamera);
+  </script>
+</body>
+</html>
